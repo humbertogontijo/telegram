@@ -2,7 +2,7 @@
   "name": "telegram",
   "version": "2.15.3",
   "description": "NodeJS/Browser MTProto API Telegram client library,",
-  "main": "index.js",
+  "main": "dist/index.d.ts",
   "types": "index.d.ts",
   "scripts": {
     "test": "jest"

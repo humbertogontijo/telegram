@@ -145,7 +145,7 @@ const clientParamsDefault = {
     langCode: "en",
     systemLangCode: "en",
     _securityChecks: true,
-    useWSS: isBrowser ? window.location.protocol == "https:" : false,
+    useWSS: isBrowser ? true : false,
     testServers: false,
 };
 

@@ -96,7 +96,8 @@ export class PromisedWebSockets {
                     this.closed = true;
                 };
                 //CONTEST
-                if (isBrowser) {
+                // eslint-disable-next-line no-undef
+                if (isBrowser && typeof(window) !== "undefined") {
                     window.addEventListener("offline", async () => {
                         await this.close();
                         if (this.resolveRead) {
