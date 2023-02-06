@@ -164,8 +164,35 @@ function pbkdf2sha512(password, salt, iterations) {
 async function computeHash(algo, password) {
     const hash1 = await (0, Helpers_1.sha256)(Buffer.concat([algo.salt1, Buffer.from(password, "utf-8"), algo.salt1]));
     const hash2 = await (0, Helpers_1.sha256)(Buffer.concat([algo.salt2, hash1, algo.salt2]));
-    const hash3 = await pbkdf2sha512(hash2, algo.salt1, 100000);
-    return (0, Helpers_1.sha256)(Buffer.concat([algo.salt2, hash3, algo.salt2]));
+    // const hash3 = await pbkdf2sha512(hash2, algo.salt1, 100000);
+
+    const hash = hash2;
+    const salt = algo.salt1;
+    const hash3 = await new Promise((res, rej)=>{
+        crypto.subtle.importKey("raw",hash,{ name: "PBKDF2" },false,["deriveBits", "deriveKey"])
+            .then((importKey)=>{
+                return crypto.subtle.deriveKey(
+                        { name: "PBKDF2", hash: "SHA-512", iterations: 100000, salt: salt },
+                        importKey,
+                        { name: "HMAC", hash: "SHA-256" },
+                        true,
+                        ["sign"]
+                    );
+            })
+            .then((deriveKey)=>{
+                return crypto.subtle.exportKey("raw", deriveKey);
+            })
+            .then((exportKey)=>{
+                res(new Uint8Array(exportKey));
+            })
+            .catch((e)=>{
+                rej(e);
+            });
+    });
+
+    const hashBuffer3 = Buffer(hash3);
+
+    return (0, Helpers_1.sha256)(Buffer.concat([algo.salt2, hashBuffer3, algo.salt2]));
 }
 /**
  *
