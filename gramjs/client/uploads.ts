@@ -2,7 +2,7 @@ import { Api } from "../tl";
 
 import { TelegramClient } from "./TelegramClient";
 import { generateRandomBytes, readBigIntFromBuffer, sleep } from "../Helpers";
-import { getAppropriatedPartSize, getInputMedia } from "../Utils";
+import { getAppropriatedPartSize, getInputMedia, getMessageId } from "../Utils";
 import { EntityLike, FileLike, MarkupLike, MessageIDLike } from "../define";
 import path from "./path";
 import { promises as fs } from "./fs";
@@ -95,6 +95,7 @@ const LARGE_FILE_THRESHOLD = 10 * 1024 * 1024;
 const UPLOAD_TIMEOUT = 15 * 1000;
 const DISCONNECT_SLEEP = 1000;
 const BUFFER_SIZE_2GB = 2 ** 31;
+const BUFFER_SIZE_20MB = 20 * 1024 * 1024;
 
 async function getFileBuffer(
     file: File | CustomFile,
@@ -128,7 +129,7 @@ export async function uploadFile(
     const buffer = await getFileBuffer(
         file,
         size,
-        fileParams.maxBufferSize || BUFFER_SIZE_2GB - 1
+        fileParams.maxBufferSize || BUFFER_SIZE_20MB - 1
     );
 
     // Make sure a new sender can be created before starting upload
@@ -154,7 +155,15 @@ export async function uploadFile(
         }
 
         for (let j = i; j < end; j++) {
-            const bytes = await buffer.slice(j * partSize, (j + 1) * partSize);
+            let endPart = (j + 1) * partSize;
+            if (endPart > size) {
+                endPart = size;
+            }
+            if (endPart == j * partSize) {
+                break;
+            }
+
+            const bytes = await buffer.slice(j * partSize, endPart);
 
             // eslint-disable-next-line no-loop-func
             sendingParts.push(
@@ -249,7 +258,7 @@ export interface SendFileInterface {
     /** Same as `replyTo` from {@link sendMessage}. */
     replyTo?: MessageIDLike;
     /** Optional attributes that override the inferred ones, like {@link Api.DocumentAttributeFilename} and so on.*/
-    attributes?: Api.TypeDocumentAttribute[];
+    attributes?: Api.TypeDocumentAttribute[] | Api.TypeDocumentAttribute[][];
     /** Optional JPEG thumbnail (for documents). Telegram will ignore this parameter unless you pass a .jpg file!<br/>
      * The file must also be small in dimensions and in disk size. Successful thumbnails were files below 20kB and 320x320px.<br/>
      *  Width/height and dimensions/size ratios may be important.
@@ -288,6 +297,10 @@ export interface SendFileInterface {
      If there is no linked chat, `SG_ID_INVALID` is thrown.
      */
     commentTo?: number | Api.Message;
+    /**
+     * Used for threads to reply to a specific thread
+     */
+    topMsgId?: number | Api.Message;
 }
 
 interface FileToMediaInterface {
@@ -514,6 +527,7 @@ export async function _sendAlbum(
         workers = 1,
         noforwards,
         commentTo,
+        topMsgId,
     }: SendFileInterface
 ) {
     entity = await client.getInputEntity(entity);
@@ -540,6 +554,11 @@ export async function _sendAlbum(
     } else {
         replyTo = utils.getMessageId(replyTo);
     }
+    if (!attributes) {
+        attributes = [];
+    }
+
+    let index = 0;
     const albumFiles = [];
     for (const file of files) {
         let { fileHandle, media, image } = await _fileToMedia(client, {
@@ -547,13 +566,15 @@ export async function _sendAlbum(
             forceDocument: forceDocument,
             fileSize: fileSize,
             progressCallback: progressCallback,
-            attributes: attributes,
+            // @ts-ignore
+            attributes: attributes[index],
             thumb: thumb,
             voiceNote: voiceNote,
             videoNote: videoNote,
             supportsStreaming: supportsStreaming,
             workers: workers,
         });
+        index++;
         if (
             media instanceof Api.InputMediaUploadedPhoto ||
             media instanceof Api.InputMediaPhotoExternal
@@ -591,10 +612,18 @@ export async function _sendAlbum(
             })
         );
     }
+    let replyObject = undefined;
+    if (replyTo != undefined) {
+        replyObject = new Api.InputReplyToMessage({
+            replyToMsgId: getMessageId(replyTo)!,
+            topMsgId: getMessageId(topMsgId),
+        });
+    }
+
     const result = await client.invoke(
         new Api.messages.SendMultiMedia({
             peer: entity,
-            replyToMsgId: replyTo,
+            replyTo: replyObject,
             multiMedia: albumFiles,
             silent: silent,
             scheduleDate: scheduleDate,
@@ -631,6 +660,7 @@ export async function sendFile(
         workers = 1,
         noforwards,
         commentTo,
+        topMsgId,
     }: SendFileInterface
 ) {
     if (!file) {
@@ -653,12 +683,14 @@ export async function sendFile(
             caption: caption,
             replyTo: replyTo,
             parseMode: parseMode,
+            attributes: attributes,
             silent: silent,
             scheduleDate: scheduleDate,
             supportsStreaming: supportsStreaming,
             clearDraft: clearDraft,
             forceDocument: forceDocument,
             noforwards: noforwards,
+            topMsgId: topMsgId,
         });
     }
     if (Array.isArray(caption)) {
@@ -680,6 +712,7 @@ export async function sendFile(
         forceDocument: forceDocument,
         fileSize: fileSize,
         progressCallback: progressCallback,
+        // @ts-ignore
         attributes: attributes,
         thumb: thumb,
         voiceNote: voiceNote,
@@ -691,10 +724,18 @@ export async function sendFile(
         throw new Error(`Cannot use ${file} as file.`);
     }
     const markup = client.buildReplyMarkup(buttons);
+    let replyObject = undefined;
+    if (replyTo != undefined) {
+        replyObject = new Api.InputReplyToMessage({
+            replyToMsgId: getMessageId(replyTo)!,
+            topMsgId: getMessageId(topMsgId),
+        });
+    }
+
     const request = new Api.messages.SendMedia({
         peer: entity,
         media: media,
-        replyToMsgId: replyTo,
+        replyTo: replyObject,
         message: caption,
         entities: msgEntities,
         replyMarkup: markup,

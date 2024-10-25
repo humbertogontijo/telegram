@@ -23,6 +23,8 @@ import {
 import { Semaphore } from "async-mutex";
 import { LogLevel } from "../extensions/Logger";
 import { isBrowser, isNode } from "../platform";
+import Deferred from "../extensions/Deferred";
+import Timeout = NodeJS.Timeout;
 
 const EXPORTED_SENDER_RECONNECT_TIMEOUT = 1000; // 1 sec
 const EXPORTED_SENDER_RELEASE_TIMEOUT = 30000; // 30 sec
@@ -195,6 +197,8 @@ export abstract class TelegramBaseClient {
     public useWSS: boolean;
 
     /** @hidden */
+    public _errorHandler?: (error: Error) => Promise<void>;
+    /** @hidden */
     public _eventBuilders: [EventBuilder, CallableFunction][];
     /** @hidden */
     public _entityCache: EntityCache;
@@ -208,7 +212,7 @@ export abstract class TelegramBaseClient {
         [ReturnType<typeof setTimeout>, Api.TypeUpdate[]]
     >();
     /** @hidden */
-    private _exportedSenderPromises = new Map<number, Promise<MTProtoSender>>();
+    public _exportedSenderPromises = new Map<number, Promise<MTProtoSender>>();
     /** @hidden */
     private _exportedSenderReleaseTimeouts = new Map<
         number,
@@ -221,6 +225,8 @@ export abstract class TelegramBaseClient {
     /** @hidden */
     _destroyed: boolean;
     /** @hidden */
+    _isSwitchingDc: boolean;
+    /** @hidden */
     protected _proxy?: ProxyInterface;
     /** @hidden */
     _semaphore: Semaphore;
@@ -230,6 +236,7 @@ export abstract class TelegramBaseClient {
     public testServers: boolean;
     /** @hidden */
     public networkSocket: typeof PromisedNetSockets | typeof PromisedWebSockets;
+    _connectedDeferred: Deferred<void>;
 
     constructor(
         session: string | Session,
@@ -277,11 +284,11 @@ export abstract class TelegramBaseClient {
         }
         this._connection = clientParams.connection;
         let initProxy;
-        if (this._proxy?.MTProxy) {
+        if (this._proxy && "MTProxy" in this._proxy) {
             this._connection = ConnectionTCPMTProxyAbridged;
             initProxy = new Api.InputClientProxy({
-                address: this._proxy!.ip,
-                port: this._proxy!.port,
+                address: this._proxy.ip,
+                port: this._proxy.port,
             });
         }
         this._initRequest = new Api.InitConnection({
@@ -315,6 +322,8 @@ export abstract class TelegramBaseClient {
         this._loopStarted = false;
         this._reconnecting = false;
         this._destroyed = false;
+        this._isSwitchingDc = false;
+        this._connectedDeferred = new Deferred();
 
         // parse mode
         this._parseMode = MarkdownParser;
@@ -354,27 +363,31 @@ export abstract class TelegramBaseClient {
     async disconnect() {
         await this._disconnect();
         await Promise.all(
-            Object.values(this._exportedSenderPromises).map(
-                (promise: Promise<MTProtoSender>) => {
-                    return (
-                        promise &&
-                        promise.then((sender: MTProtoSender) => {
-                            if (sender) {
-                                return sender.disconnect();
-                            }
-                            return undefined;
-                        })
-                    );
-                }
-            )
+            Object.values(this._exportedSenderPromises)
+                .map((promises) => {
+                    return Object.values(promises).map((promise: any) => {
+                        return (
+                            promise &&
+                            promise.then((sender: MTProtoSender) => {
+                                if (sender) {
+                                    return sender.disconnect();
+                                }
+                                return undefined;
+                            })
+                        );
+                    });
+                })
+                .flat()
         );
 
-        this._exportedSenderPromises = new Map<
-            number,
-            Promise<MTProtoSender>
-        >();
-
-        // TODO cancel hanging promises
+        Object.values(this._exportedSenderReleaseTimeouts).forEach(
+            (timeouts) => {
+                Object.values(timeouts).forEach((releaseTimeout: any) => {
+                    clearTimeout(releaseTimeout);
+                });
+            }
+        );
+        this._exportedSenderPromises.clear();
     }
 
     get disconnected() {
@@ -435,7 +448,8 @@ export abstract class TelegramBaseClient {
                         proxy: this._proxy,
                         testServers: this.testServers,
                         socket: this.networkSocket,
-                    })
+                    }),
+                    false
                 );
 
                 if (this.session.dcId !== dcId && !sender._authenticated) {
@@ -467,7 +481,9 @@ export abstract class TelegramBaseClient {
                     sender.userDisconnected = false;
                     return sender;
                 }
-                if (this._log.canSend(LogLevel.ERROR)) {
+                if (this._errorHandler) {
+                    await this._errorHandler(err as Error);
+                } else if (this._log.canSend(LogLevel.ERROR)) {
                     console.error(err);
                 }
 
@@ -506,6 +522,9 @@ export abstract class TelegramBaseClient {
                 }
             }
         } catch (err) {
+            if (this._errorHandler) {
+                await this._errorHandler(err as Error);
+            }
             if (this._log.canSend(LogLevel.ERROR)) {
                 console.error(err);
             }
@@ -521,7 +540,15 @@ export abstract class TelegramBaseClient {
             dcId,
             setTimeout(() => {
                 this._exportedSenderReleaseTimeouts.delete(dcId);
-                sender.disconnect();
+                if (sender._pendingState.values().length) {
+                    console.log(
+                        "sender already has some hanging states. reconnecting"
+                    );
+                    sender._reconnect();
+                    this._borrowExportedSender(dcId, false, sender);
+                } else {
+                    sender.disconnect();
+                }
             }, EXPORTED_SENDER_RELEASE_TIMEOUT)
         );
 
@@ -542,6 +569,7 @@ export abstract class TelegramBaseClient {
             onConnectionBreak: this._cleanupExportedSender.bind(this),
             client: this as unknown as TelegramClient,
             securityChecks: this._securityChecks,
+            _exportedSenderPromises: this._exportedSenderPromises,
         });
     }
 
@@ -570,5 +598,27 @@ export abstract class TelegramBaseClient {
 
     get logger() {
         return this._log;
+    }
+
+    /**
+     * Custom error handler for the client
+     * @example
+     * ```ts
+     * client.onError = async (error)=>{
+     *         console.log("error is",error)
+     *     }
+     * ```
+     */
+    set onError(handler: (error: Error) => Promise<void>) {
+        this._errorHandler = async (error: Error) => {
+            try {
+                await handler(error);
+            } catch (e: any) {
+                if (this._log.canSend(LogLevel.ERROR)) {
+                    e.message = `Error ${e.message} thrown while handling top-level error: ${error.message}`;
+                    console.error(e);
+                }
+            }
+        };
     }
 }

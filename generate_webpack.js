@@ -91,7 +91,7 @@ npmi.on("close", (code) => {
     throw new Error("Error happened " + code);
   }
 
-  const tsc = exec("tsc");
+  const tsc = exec("npx tsc");
   tsc.stdout.on("data", function (data) {
     console.log("stdout: " + data.toString());
   });
@@ -128,7 +128,11 @@ npmi.on("close", (code) => {
         console.log("SOME ERROR HAPPENED");
         process.exit(0);
       }
-      exec("npm i");
+      if (process.env.CI) {
+        exec("npm ci");
+      } else {
+        exec("npm i");
+      }
       console.log(
         "DONE!. File created at ",
         path.resolve(__dirname, "browser/telegram.js")

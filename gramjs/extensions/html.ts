@@ -46,6 +46,9 @@ class HTMLToTelegramParser implements Handler {
             EntityType = Api.MessageEntityStrike;
         } else if (name == "blockquote") {
             EntityType = Api.MessageEntityBlockquote;
+            if (attributes.expandable !== undefined) {
+                args.collapsed = true;
+            }
         } else if (name == "code") {
             const pre = this._buildingEntities.get("pre");
             if (pre && pre instanceof Api.MessageEntityPre) {
@@ -78,8 +81,10 @@ class HTMLToTelegramParser implements Handler {
             }
             this._openTagsMeta.shift();
             this._openTagsMeta.unshift(url);
+        } else if (name == "tg-emoji") {
+            EntityType = Api.MessageEntityCustomEmoji;
+            args["documentId"] = attributes["emoji-id"];
         }
-
         if (EntityType && !this._buildingEntities.has(name)) {
             this._buildingEntities.set(
                 name,
@@ -205,13 +210,11 @@ export class HTMLParser {
                 html.push(`<blockquote>${entityText}</blockquote>`);
             } else if (entity instanceof Api.MessageEntityPre) {
                 if (entity.language) {
-                    html.push(`<pre>
-<code class="language-${entity.language}">
-    ${entityText}
-</code>
-</pre>`);
+                    html.push(
+                        `<pre><code class="language-${entity.language}">${entityText}</code></pre>`
+                    );
                 } else {
-                    html.push(`<pre></pre><code>${entityText}</code><pre>`);
+                    html.push(`<pre>${entityText}</pre>`);
                 }
             } else if (entity instanceof Api.MessageEntityEmail) {
                 html.push(`<a href="mailto:${entityText}">${entityText}</a>`);
@@ -222,6 +225,10 @@ export class HTMLParser {
             } else if (entity instanceof Api.MessageEntityMentionName) {
                 html.push(
                     `<a href="tg://user?id=${entity.userId}">${entityText}</a>`
+                );
+            } else if (entity instanceof Api.MessageEntityCustomEmoji) {
+                html.push(
+                    `<tg-emoji emoji-id="${entity.documentId}">${entityText}</tg-emoji>`
                 );
             } else {
                 skipEntity = true;

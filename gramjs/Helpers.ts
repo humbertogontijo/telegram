@@ -2,6 +2,7 @@ import bigInt from "big-integer";
 import type { EntityLike } from "./define";
 import type { Api } from "./tl";
 import crypto from "./CryptoFile";
+import { isNode } from "./platform";
 
 /**
  * converts a buffer to big int
@@ -136,44 +137,21 @@ export function readBufferFromBigInt(
     if (!signed && bigIntVar.lesser(bigInt(0))) {
         throw new Error("Cannot convert to unsigned");
     }
-    let below = false;
-    if (bigIntVar.lesser(bigInt(0))) {
-        below = true;
-        bigIntVar = bigIntVar.abs();
+
+    if (signed && bigIntVar.lesser(bigInt(0))) {
+        bigIntVar = bigInt(2)
+            .pow(bigInt(bytesNumber).multiply(8))
+            .add(bigIntVar);
     }
 
     const hex = bigIntVar.toString(16).padStart(bytesNumber * 2, "0");
-    let littleBuffer = Buffer.from(hex, "hex");
+    let buffer = Buffer.from(hex, "hex");
+
     if (little) {
-        littleBuffer = littleBuffer.reverse();
+        buffer = buffer.reverse();
     }
 
-    if (signed && below) {
-        if (little) {
-            let reminder = false;
-            if (littleBuffer[0] !== 0) {
-                littleBuffer[0] -= 1;
-            }
-            for (let i = 0; i < littleBuffer.length; i++) {
-                if (littleBuffer[i] === 0) {
-                    reminder = true;
-                    continue;
-                }
-                if (reminder) {
-                    littleBuffer[i] -= 1;
-                    reminder = false;
-                }
-                littleBuffer[i] = 255 - littleBuffer[i];
-            }
-        } else {
-            littleBuffer[littleBuffer.length - 1] =
-                256 - littleBuffer[littleBuffer.length - 1];
-            for (let i = 0; i < littleBuffer.length - 1; i++) {
-                littleBuffer[i] = 255 - littleBuffer[i];
-            }
-        }
-    }
-    return littleBuffer;
+    return buffer;
 }
 
 /**
@@ -435,7 +413,7 @@ export function getMinBigInt(
  * @param max
  * @returns {number}
  */
-export function getRandomInt(min: number, max: number) {
+export function getRandomInt(min: number, max: number): number {
     min = Math.ceil(min);
     max = Math.floor(max);
     return Math.floor(Math.random() * (max - min + 1)) + min;
@@ -444,10 +422,15 @@ export function getRandomInt(min: number, max: number) {
 /**
  * Sleeps a specified amount of time
  * @param ms time in milliseconds
+ * @param isUnref make a timer unref'ed
  * @returns {Promise}
  */
-export const sleep = (ms: number) =>
-    new Promise((resolve) => setTimeout(resolve, ms));
+export const sleep = (ms: number, isUnref: boolean = false) =>
+    new Promise((resolve) =>
+        isUnref && isNode
+            ? setTimeout(resolve, ms).unref()
+            : setTimeout(resolve, ms)
+    );
 
 /**
  * Helper to export two buffers of same length

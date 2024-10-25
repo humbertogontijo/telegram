@@ -7,6 +7,7 @@ import mime from "mime";
 import type { ParseInterface } from "./client/messageParse";
 import { MarkdownParser } from "./extensions/markdown";
 import { CustomFile } from "./client/uploads";
+import { MarkdownV2Parser } from "./extensions/markdownv2";
 
 export function getFileInfo(
     fileLocation:
@@ -235,6 +236,8 @@ export function _photoSizeByteCount(size: Api.TypePhotoSize) {
         return size.bytes.length;
     } else if (size instanceof Api.PhotoSizeEmpty) {
         return 0;
+    } else if (size instanceof Api.PhotoSizeProgressive) {
+        return size.sizes[size.sizes.length - 1];
     } else {
         return undefined;
     }
@@ -1103,6 +1106,10 @@ export function sanitizeParseMode(
 ): ParseInterface {
     if (mode === "md" || mode === "markdown") {
         return MarkdownParser;
+    }
+
+    if (mode === "md2" || mode === "markdownv2") {
+        return MarkdownV2Parser;
     }
     if (mode == "html") {
         return HTMLParser;

@@ -111,15 +111,22 @@ export class _DialogsIter extends RequestIter {
         for (const m of r.messages) {
             let message = m as unknown as Api.Message;
             try {
-                // todo make sure this never fails
-                message._finishInit(this.client, entities, undefined);
+                if (message && "_finishInit" in message) {
+                    // todo make sure this never fails
+                    message._finishInit(this.client, entities, undefined);
+                }
             } catch (e) {
+                console.log("msg", message);
+
                 this.client._log.error(
                     "Got error while trying to finish init message with id " +
                         m.id
                 );
                 if (this.client._log.canSend(LogLevel.ERROR)) {
                     console.error(e);
+                }
+                if (this.client._errorHandler) {
+                    await this.client._errorHandler(e as Error);
                 }
             }
             messages.set(
@@ -180,7 +187,7 @@ export class _DialogsIter extends RequestIter {
         this.request.offsetId = lastMessage ? lastMessage.id : 0;
         this.request.offsetDate = lastMessage ? lastMessage.date! : 0;
         this.request.offsetPeer =
-            this.buffer[this.buffer.length - 1].inputEntity;
+            this.buffer[this.buffer.length - 1]?.inputEntity;
     }
 }
 

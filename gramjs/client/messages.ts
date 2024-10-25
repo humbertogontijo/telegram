@@ -14,6 +14,7 @@ import {
     TotalList,
     isArrayLike,
     groupBy,
+    generateRandomBigInt,
 } from "../Helpers";
 import { getInputMedia, getMessageId, getPeerId, parseID } from "../Utils";
 import type { TelegramClient } from "../";
@@ -145,7 +146,7 @@ export class _MessagesIter extends RequestIter {
                 limit: 0,
                 maxId: 0,
                 minId: 0,
-                hash: bigInt.zero,
+                hash: generateRandomBigInt(),
                 fromId: fromUser,
             });
             if (
@@ -518,6 +519,10 @@ export interface SendMessageParams {
      If there is no linked chat, `SG_ID_INVALID` is thrown.
      */
     commentTo?: number | Api.Message;
+    /**
+     * Used for threads to reply to a specific thread
+     */
+    topMsgId?: number | Api.Message;
 }
 
 /** interface used for forwarding messages */
@@ -531,6 +536,7 @@ export interface ForwardMessagesParams {
     silent?: boolean;
     /** If set, the message(s) won't forward immediately, and instead they will be scheduled to be automatically sent at a later time. */
     schedule?: DateLike;
+    dropAuthor?: boolean;
     noforwards?: boolean;
 }
 
@@ -704,6 +710,7 @@ export async function sendMessage(
         schedule,
         noforwards,
         commentTo,
+        topMsgId,
     }: SendMessageParams = {}
 ) {
     if (file) {
@@ -727,6 +734,7 @@ export async function sendMessage(
             buttons: buttons,
             noforwards: noforwards,
             commentTo: commentTo,
+            topMsgId: topMsgId,
         });
     }
     entity = await client.getInputEntity(entity);
@@ -736,6 +744,14 @@ export async function sendMessage(
         replyTo = discussionData.replyTo;
     }
     let markup, request;
+    let replyObject = undefined;
+    if (replyTo != undefined) {
+        replyObject = new Api.InputReplyToMessage({
+            replyToMsgId: getMessageId(replyTo)!,
+            topMsgId: getMessageId(topMsgId),
+        });
+    }
+
     if (message && message instanceof Api.Message) {
         if (buttons == undefined) {
             markup = message.replyMarkup;
@@ -745,6 +761,7 @@ export async function sendMessage(
         if (silent == undefined) {
             silent = message.silent;
         }
+
         if (
             message.media &&
             !(message.media instanceof Api.MessageMediaWebPage)
@@ -763,7 +780,7 @@ export async function sendMessage(
             peer: entity,
             message: message.message || "",
             silent: silent,
-            replyToMsgId: getMessageId(replyTo),
+            replyTo: replyObject,
             replyMarkup: markup,
             entities: message.entities,
             clearDraft: clearDraft,
@@ -785,12 +802,13 @@ export async function sendMessage(
                 "The message cannot be empty unless a file is provided"
             );
         }
+
         request = new Api.messages.SendMessage({
             peer: entity,
             message: message.toString(),
             entities: formattingEntities,
             noWebpage: !linkPreview,
-            replyToMsgId: getMessageId(replyTo),
+            replyTo: replyObject,
             clearDraft: clearDraft,
             silent: silent,
             replyMarkup: client.buildReplyMarkup(buttons),
@@ -821,7 +839,14 @@ export async function sendMessage(
 export async function forwardMessages(
     client: TelegramClient,
     entity: EntityLike,
-    { messages, fromPeer, silent, schedule, noforwards }: ForwardMessagesParams
+    {
+        messages,
+        fromPeer,
+        silent,
+        schedule,
+        noforwards,
+        dropAuthor,
+    }: ForwardMessagesParams
 ) {
     if (!isArrayLike(messages)) {
         messages = [messages];
@@ -869,6 +894,7 @@ export async function forwardMessages(
             silent: silent,
             scheduleDate: schedule,
             noforwards: noforwards,
+            dropAuthor: dropAuthor,
         });
         const result = await client.invoke(request);
         sent.push(
@@ -1149,7 +1175,9 @@ export async function getCommentData(
             msgId: utils.getMessageId(message),
         })
     );
-    const relevantMessage = result.messages[0];
+    const relevantMessage = result.messages.reduce(
+        (p: Api.TypeMessage, c: Api.TypeMessage) => (p && p.id < c.id ? p : c)
+    );
     let chat;
     for (const c of result.chats) {
         if (
