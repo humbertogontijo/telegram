@@ -190,36 +190,7 @@ async function computeHash(
         Buffer.concat([algo.salt1, Buffer.from(password, "utf-8"), algo.salt1])
     );
     const hash2 = await sha256(Buffer.concat([algo.salt2, hash1, algo.salt2]));
-
-    const hash = hash2;
-    const salt = algo.salt1;
-
-    let globalCrypto = (typeof(window) !== 'undefined' && window.crypto ? window.crypto : (typeof(self) !== 'undefined' && self.crypto ? self.crypto : null));
-
-    const pbk = await new Promise((res, rej)=>{
-        (globalCrypto as any).subtle.importKey("raw",hash,{ name: "PBKDF2" },false,["deriveBits", "deriveKey"])
-            .then((importKey: any)=>{
-                return (globalCrypto as any).subtle.deriveKey(
-                        { name: "PBKDF2", hash: "SHA-512", iterations: 100000, salt: salt },
-                        importKey,
-                        { name: "HMAC", hash: "SHA-256" },
-                        true,
-                        ["sign"]
-                    );
-            })
-            .then((deriveKey: any)=>{
-                return (globalCrypto as any).subtle.exportKey("raw", deriveKey);
-            })
-            .then((exportKey: any)=>{
-                res(new Uint8Array(exportKey));
-            })
-            .catch((e: any)=>{
-                rej(e);
-            });
-    });
-
-    const hash3 = Buffer.from(pbk as Uint8Array);
-
+    const hash3 = await pbkdf2sha512(hash2, algo.salt1, 100000);
     return sha256(Buffer.concat([algo.salt2, hash3, algo.salt2]));
 }
 
